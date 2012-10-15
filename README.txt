@@ -59,9 +59,9 @@ dep.cpp, parser.cpp が一部修正されます。新たに kakarot.h が追加�
 ・Mac OS X 10.7(Lion) では、リンクのときに 関数iconv_*** が見つからない、とエラーになります。同じくconfigureしたあとの $CABOCHA/src/Makefile に以下の変更が必要でした。(Ubuntu 12.04ではこのエラーは出ませんでした）
 
 175c175
-< LIBS = -lcrfpp -lmecab  -L/Users/eikii/eilocal/lib -lmecab -lstdc++
+< LIBS = -lcrfpp -lmecab  -L$(LOCALDIR)/lib -lmecab -lstdc++
 ---
-> LIBS = -lcrfpp -lmecab  -L/Users/eikii/eilocal/lib -lmecab -lstdc++ -liconv
+> LIBS = -lcrfpp -lmecab  -L$(LOCALDIR)/lib -lmecab -lstdc++ -liconv
 
 
 4. 使用法
