@@ -1,0 +1,86 @@
+diff -c old/dep.cpp new/dep.cpp
+*** old/dep.cpp	2012-09-19 15:08:36.000000000 +0900
+--- new/dep.cpp	2012-09-19 15:08:57.000000000 +0900
+***************
+*** 1,6 ****
+  // CaboCha -- Yet Another Japanese Dependency Parser
+  //
+- //  $Id: dep.cpp 50 2009-05-03 08:25:36Z taku-ku $;
+  //
+  //  Copyright(C) 2001-2008 Taku Kudo <taku@chasen.org>
+  #include <algorithm>
+--- 1,5 ----
+***************
+*** 18,23 ****
+--- 17,28 ----
+  #include "tree_allocator.h"
+  #include "utils.h"
+  
++ #define KAKAROT
++ 
++ #ifdef KAKAROT
++ #include "kakarot.h"
++ #endif
++ 
+  namespace CaboCha {
+  
+  namespace {
+***************
+*** 40,45 ****
+--- 45,53 ----
+        }
+      }
+      CHECK_FALSE(!failed) << "no such file or directory: " << filename;
++ #ifdef KAKAROT
++     kakarotOpen(param);
++ #endif
+    }
+    return true;
+  }
+***************
+*** 104,109 ****
+--- 112,120 ----
+      data->results[i].score = 0.0;
+      data->results[i].link = -1;
+    }
++ #ifdef KAKAROT
++   kakarotBuild(tree);
++ #endif
+  }
+  
+  bool DependencyParser::estimate(const Tree *tree,
+***************
+*** 280,285 ****
+--- 291,300 ----
+  
+    tree->set_output_layer(OUTPUT_DEP);
+  
++ #ifdef KAKAROT
++     kakarotParse(tree);
++ #endif
++ 
+    return true;
+  }
+  
+diff -c old/parser.cpp new/parser.cpp
+*** old/parser.cpp	2012-09-19 15:08:44.000000000 +0900
+--- new/parser.cpp	2012-09-19 15:09:03.000000000 +0900
+***************
+*** 1,6 ****
+  // CaboCha -- Yet Another Japanese Dependency Parser
+  //
+- //  $Id: parser.cpp 50 2009-05-03 08:25:36Z taku-ku $;
+  //
+  //  Copyright(C) 2001-2008 Taku Kudo <taku@chasen.org>
+  #include <crfpp.h>
+--- 1,5 ----
+***************
+*** 57,62 ****
+--- 56,62 ----
+    { "mecabrc",         'b', 0, "FILE", "use FILE as mecabrc"},
+    { "mecab-dicdir",    'd', 0, "DIR",  "use DIR as mecab dictionary directory"},
+    { "output",          'o', 0, "FILE", "use FILE as output file"},
++   { "debug-mode",      'g', "0", "MODE", "set debug mode"},
+    { "version",         'v', 0, 0, "show the version and exit"},
+    { "help",            'h', 0, 0, "show this help and exit"},
+    {0, 0, 0, 0}
