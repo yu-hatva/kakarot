@@ -1,4 +1,3 @@
-
 #include <assert.h>
  // for uint64_t
 #include <stdint.h>
@@ -748,7 +747,7 @@ if (EDBG) printf("eval entered\n");
    if (dstch.isPred()) {
      int nGa = 0, nWo = 0, nNi = 0;
      forr(s, 0, dstch.nSrces-1) {  // 係り元をなめる
-       semChunkC& srcch = semChunks[s];
+       semChunkC& srcch = semChunks[dstch.srces[s]];
        if      (srcch.hasGA()) nGa++;
        else if (srcch.hasWO()) nWo++;
        else if (srcch.hasNI()) nNi++;
