@@ -14,6 +14,8 @@
 int EDBG = 0;
 #define EDBGE (1 && EDBG)
 int CMP_CABOCHA = 0;
+int REGR_MODE = 0;
+int CMPONLY  = 0;
 
 namespace CaboCha {
 
@@ -115,6 +117,9 @@ struct chunkItorC {
 // struct semChunkC 文節データ構造
 
 #define MAXSRC 16
+#define MAXFLAG 30
+
+bool isEndOfQuoteSent(int i);  // defined below
 
 struct semChunkC {
   Chunk* buddy() const { return cabChunks[suf()]; } // 対応するcabocha文節
@@ -127,7 +132,7 @@ struct semChunkC {
   int dst;            // 係り先
   int hop;            // ルートから数えた係り段数
 
-  int flags;          // 各種フラグ記憶場所　以下参照
+  uint64_t flags;          // 各種フラグ記憶場所　以下参照
   enum { FG_PREFER_NOUN  =    2, FG_PREFER_PRED =    4, 
          FG_IS_NOUN      =    8, FG_IS_PRED     = 0x10,
          FG_HAS_ADNOM_NO = 0x20, FG_HAS_HA      = 0x40,
@@ -143,13 +148,27 @@ struct semChunkC {
          FG_HAS_POSTP_TERM = 0x1000000,
          FG_IS_CONJ = 0x2000000, FG_HAS_AUXIL = 0x4000000,
          FG_HAS_POSTP = 0x8000000,
+         FG_NOUN_ONLY = 0x10000000,
+         FG_NOUN_BEGIN = 0x20000000,
+         FG_HAS_SUBJUNC = 0x40000000
        };
+#define  FG_ADJ_RENYOU   0x80000000LL
+#define  FG_HAS_NO      0x100000000LL
+#define  FG_HAS_QUOTING_TO 0x200000000LL
+#define  FG_HAS_COMMA_LAST 0x400000000LL
+#define  FG_IS_ADVERB      0x800000000LL
 
   void build(Tree*); // 文節の各種情報セットアップ
   void reset() { memset(this, 0, sizeof(*this)); }
 
   void setPreferNoun() { flags |= FG_PREFER_NOUN; }
   void setPreferPred() { flags |= FG_PREFER_PRED; }
+  void clrDpnd() {
+    hop = dst = -1;
+    nSrces = 0;
+    forr(j, 0, MAXSRC-1)
+      srces[j] = -1;
+ }
 
   bool preferNoun() const // 係り先は名詞
     { return ((flags & FG_PREFER_NOUN) != 0); } 
@@ -166,8 +185,13 @@ struct semChunkC {
   bool isVerb() const      // 主辞が動詞
     { return ((flags & FG_IS_VERB) != 0); }
 
+  bool isAdverb() const      // 主辞が副詞
+    { return ((flags & FG_IS_ADVERB) != 0LL); }
+
+   // 11/3/2012 FIXME!!!!  temp patch  文末文節は強制的に述語扱い。
+   //           文末に副詞、のケース用 +34@knbc
   bool isPred() const  // 主辞が述語（動詞|形容[動]詞|名詞+ダ）
-    { return ((flags & FG_IS_PRED) != 0); }
+    { return ((flags & FG_IS_PRED) != 0 || suf() == nChunk-1); }
     
   bool hasAdnomNO() const // 連体の「の」あり - caseTokenからわかるか？
     { return ((flags & FG_HAS_ADNOM_NO) != 0); }
@@ -190,11 +214,20 @@ struct semChunkC {
   bool hasTO() const // 「と」あり
     { return ((flags & FG_HAS_TO) != 0); } 
 
+  bool hasQuotingTO() const // 引用の「と」あり
+    { return ((flags & FG_HAS_QUOTING_TO) != 0LL); } 
+
   bool hasMO() const // 「も」あり
     { return ((flags & FG_HAS_MO) != 0); } 
 
+  bool hasNO() const // 「の」あり
+    { return ((flags & FG_HAS_NO) != 0LL); } 
+
   bool hasNonGACase() const // 「が」以外の格あり
-    { return ((flags & (FG_HAS_MO|FG_HAS_TO|FG_HAS_DE|FG_HAS_WO)) != 0); } 
+    { return ((flags & (FG_HAS_MO|FG_HAS_TO|FG_HAS_DE|FG_HAS_WO|FG_HAS_NI)) != 0); } 
+    //{ return ((flags & (FG_HAS_MO|FG_HAS_TO|FG_HAS_DE|FG_HAS_WO)) != 0); } 
+    // 「肌に優しい」のようなのもあるが、「に」も入れた方が正答率UP 11/1/2012
+    // 接続助詞を除く方がよいように思えるが、なぜか正答率下がる？？
 
   bool hasPostpConn() const    // 接続助詞あり
     { return ((flags & FG_HAS_POSTP_CONN) != 0); }
@@ -211,10 +244,26 @@ struct semChunkC {
   bool hasComma() const    // コンマあり
     { return ((flags & FG_HAS_COMMA) != 0); }
 
+  bool hasCommaLast() const    // 文節の最後がコンマ
+    { return ((flags & FG_HAS_COMMA_LAST) != 0LL); }
+
   bool hasTermination() const    // 文末記号あり
     { return ((flags & FG_HAS_TERMINATION) != 0); }
 
-  // TBC [LR]PAREN/QUOTEは未
+  void setTermination()          // 文末記号をつける
+    { flags |= FG_HAS_TERMINATION; }
+
+  bool hasLQuote() const    // 左かぎかっこあり
+    { return ((flags & FG_HAS_L_QUOTE) != 0); }
+
+  bool hasRQuote() const    // 右かぎかっこあり
+    { return ((flags & FG_HAS_R_QUOTE) != 0); }
+
+  bool hasLParen() const    // 左かっこあり
+    { return ((flags & FG_HAS_L_PAREN) != 0); }
+
+  bool hasRParen() const    // 右かっこあり
+    { return ((flags & FG_HAS_R_PAREN) != 0); }
 
   bool hasPara() const    // 並立助詞あり
     { return ((flags & FG_HAS_PARA) != 0); }
@@ -231,6 +280,26 @@ struct semChunkC {
   bool playAsNoun() const {  // 述語が格補語（？）になっている
     return isPred() && hasPostp() && !hasPostpConn() && !hasPostpTerm();
   }
+
+  bool isNounOnly() const    // 名詞のみの文節
+    { return ((flags & FG_NOUN_ONLY) != 0); }
+
+  bool isNounBegin() const    // 名詞で始まる文節
+    { return ((flags & FG_NOUN_BEGIN) != 0); }
+
+  bool hasSubjunc() const    // 仮定形助動詞　たら・だら・なら
+    { return ((flags & FG_HAS_SUBJUNC) != 0); }
+
+  bool adjRenyou() const    // 形容詞連用テ接続（副詞的？）
+    { return ((flags & FG_ADJ_RENYOU) != 0LL); }
+
+  bool leastTerminal() const    // 終端性が少ない
+    { return (isPred2Noun() ); }
+    //{ return (isPred2Noun() || playAsNoun()); }
+
+  bool termOriented() const    // 終端に係る傾向
+    { return (hasSubjunc() ); }
+    //{ return (hasPostpConn() || hasSubjunc() || isConj()); }
 };
 
 semChunkC semChunks[MAXCHUNKS];
@@ -254,6 +323,7 @@ static inline const char *get_token(const Token *token, size_t id) {
 void semChunkC::build(Tree* tree) {  // 文節の各種情報セットアップ
  reset();
  Chunk* cabch = buddy();
+ //int tkSize = cabch->token_size; // 文節のトークン長さ
  int tkStt = cabch->token_pos;    // この文節の開始トークン位置
  int tkEnd = tkStt + cabch->token_size - 1; // ラストトークン位置
 
@@ -269,6 +339,8 @@ void semChunkC::build(Tree* tree) {  // 文節の各種情報セットアップ
  }
 
   // この文節の主辞・接続辞・格辞
+ int headPos = tkStt + cabch->head_pos;
+ int connPos = tkStt + cabch->func_pos;
  const Token* thead = tree->token(tkStt + cabch->head_pos);
  const Token* tconn = tree->token(tkStt + cabch->func_pos);
  const Token* tcase = caseTokenID<0 ? tconn : tree->token(caseTokenID);
@@ -278,48 +350,126 @@ void semChunkC::build(Tree* tree) {  // 文節の各種情報セットアップ
 
  const char* h0 = get_token(thead, 0);
  const char* h1 = get_token(thead, 1);
+ const char* h5 = get_token(thead, 5);
+ const char* c0 = get_token(tconn, 0);
  const char* c1 = get_token(tconn, 1);  // NOTE could be NULL
+ const char* c2 = get_token(tconn, 2);
  const char* a1 = get_token(tcase, 1);
 
- if (!strcmp(h0, "名詞") ||
+ bool is_noun = !strcmp(h0, "名詞") &&  // 11/3/2012 形容動詞を除く
+                 !(!strcmp(h1, "形容動詞語幹") && !strcmp(c0, "助動詞") &&
+                   !strcmp(tree->token(connPos)->normalized_surface, "な") &&
+                   connPos == headPos+1);
+
+ if (is_noun ||
      !strcmp(h0, "助詞")   )  // 9/13/2012 (IPAでは?)助詞が主辞になることあり
    flags |= FG_IS_NOUN;     // 異常な|ほど|  言った|ものの|  大体形式名詞の
                             // ようなのでとりあえず名詞扱いにしてみる
- forr(i, tkStt, tkEnd) {
+
+ bool nounOnly = true;
+
+ forr(i, tkStt, tkEnd) {  // for 文節中の全ての形態素
    const char* tok = tree->token(i)->normalized_surface;
-   if (!strcmp(tok, "、"))   // コンマはラストとは限らない　彼は|そうだ、と|言って
+   if (!strcmp(tok, "、")) { // コンマはラストとは限らない　彼は|そうだ、と|言って
      flags |= FG_HAS_COMMA;
+     if (i == tkEnd)
+       flags |= FG_HAS_COMMA_LAST;
+   }
 
    if (!strcmp(tok, "。") ||
        !strcmp(tok, "？") ||
        !strcmp(tok, "！")   )
      flags |= FG_HAS_TERMINATION;
 
+   if (!strcmp(tok, "「"))
+     flags |= FG_HAS_L_QUOTE;
+
+   if (!strcmp(tok, "」"))
+     flags |= FG_HAS_R_QUOTE;
+
+    // FIXME quotes and brackets are mixed.  need to differentiate?
+   if (!strcmp(tok, "「") ||
+       !strcmp(tok, "『") ||
+       !strcmp(tok, "【") ||
+       !strcmp(tok, "〈") ||
+       !strcmp(tok, "《") ||
+       !strcmp(tok, "‘") ||
+       !strcmp(tok, "“") ||
+       !strcmp(tok, "(") ||
+       !strcmp(tok, "[") ||
+       !strcmp(tok, "{")   )
+     flags |= FG_HAS_L_PAREN;
+
+   if (!strcmp(tok, "」") ||
+       !strcmp(tok, "』") ||
+       !strcmp(tok, "】") ||
+       !strcmp(tok, "〉") ||
+       !strcmp(tok, "》") ||
+       !strcmp(tok, "’") ||
+       !strcmp(tok, "”") ||
+       !strcmp(tok, ")") ||
+       !strcmp(tok, "]") ||
+       !strcmp(tok, "}")   )
+     flags |= FG_HAS_R_PAREN;
+
      // TEMP FIX 9/13/2012 「繰り返すように」「見落としてしまうのではないか」
      // などは一文節で、(cabochaでは)主辞が名詞になってしまう。文節中の
      // どこかに自立動詞があったら述語属性を立てる
-     // 「サ変名詞＋する」も含む
-   if (!strcmp(get_token(tree->token(i), 0), "動詞") &&
-       !strcmp(get_token(tree->token(i), 1), "自立")   )
+     // 「サ変名詞＋する」も含む  形容詞も同様
+   const char* ti0 = get_token(tree->token(i), 0);
+   const char* ti1 = get_token(tree->token(i), 1);
+
+   if (!strcmp(ti0, "動詞") &&
+       !strcmp(ti1, "自立")   )
      flags |= FG_IS_PRED | FG_IS_VERB;
 
-   if (!strcmp(get_token(tree->token(i), 0), "助動詞"))
+   if (!strcmp(ti0, "形容詞") &&
+       !strcmp(ti1, "自立")   )
+     flags |= FG_IS_PRED;
+
+   if (!strcmp(ti0, "助動詞"))
      flags |= FG_HAS_AUXIL;
 
-   if (!strcmp(get_token(tree->token(i), 0), "助詞"))
+   if (!strcmp(ti0, "助詞"))
      flags |= FG_HAS_POSTP;
 
- }
+   bool pureNoun = !strcmp(ti0, "名詞") && (
+                     !strcmp(ti1, "一般") ||
+                     !strcmp(ti1, "数") ||
+                     !strcmp(ti1, "固有名詞") );
+
+   bool conjugateNoun = !strcmp(ti0, "名詞") && (
+                     !strcmp(ti1, "サ変接続") ||
+                     !strcmp(ti1, "形容動詞語幹") );
+
+   bool hardNoun = pureNoun || conjugateNoun;
+
+   if (pureNoun)
+     flags |= FG_IS_NOUN;
+
+   if (i == tkStt && hardNoun)
+     flags |= FG_NOUN_BEGIN;
+
+   if (strcmp(ti0, "記号") && !hardNoun)  // 記号でも名詞でもない
+     nounOnly = false;
+
+ }  // for 文節中の全ての形態素
+
+ if (nounOnly)
+     flags |= FG_NOUN_ONLY;
 
  if ((unsigned)tkEnd == tree->token_size() - 1)
      flags |= FG_HAS_TERMINATION;
+
+ if (!strcmp(h0, "副詞"))
+     flags |= FG_IS_ADVERB;
 
  bool hasConn =  c1 && !strcmp(c1, "接続助詞");
  if (hasConn)
      flags |= FG_HAS_POSTP_CONN;
 
- bool hasTerm =  c1 && !strcmp(c1, "終助詞");
- if (hasTerm)
+ bool hasTermPost =  c1 && !strcmp(c1, "終助詞");
+ if (hasTermPost)
      flags |= FG_HAS_POSTP_TERM;
 
 if (EDBG)
@@ -331,7 +481,9 @@ if (EDBG)
      !strcmp(get_token(thead, 0), "形容詞") ||
      !strcmp(get_token(thead, 0), "名詞") &&    // 名詞+ダ(助動詞) / 形容動詞
        (h1 && !strcmp(h1, "形容動詞語幹") && hasAuxil() ||
-        hasConn || hasTerm ||
+        hasConn || hasTermPost ||
+        hasTermination() ||    // 体言止め
+        hasRQuote() && isEndOfQuoteSent(suf()) || //体言止め(かぎかっこ文の最後)
         !strcmp(get_token(tconn, 0), "助動詞")     )  // FIXME? 正しい?
     ) {
    flags |= FG_IS_PRED;
@@ -339,7 +491,8 @@ if (EDBG)
      const char* t5 = get_token(tree->token(i), 5);
      if ((t5 && strstr(t5, "体言接続") ||
           t5 && strstr(t5, "基本形"))&& //基本,連体で文節未完なら連体形(のはず)
-            !(hasTermination() || hasConn || hasTerm))
+            !(hasTermination() || hasConn || hasTermPost
+              || hasRQuote() && isEndOfQuoteSent(suf()) ))
        flags |= FG_IS_PRED2NOUN;
    }
       // 述語の文節に係・格助詞がついてたら、名詞化されてるはず「その奥深くに」
@@ -347,7 +500,20 @@ if (EDBG)
      flags |= FG_IS_NOUN;
  }
 
- if (!strcmp(tconn->surface, "は") ||
+   // 形容詞単独・連用テ接続 -> 副詞的（のはず？）
+ if (!strcmp(h0, "形容詞") &&
+     h5 && !strcmp(h5, "連用テ接続") && headPos == connPos)
+   flags |= FG_ADJ_RENYOU;
+
+   // 仮定の助動詞　たら・だら・なら
+ if ((!strcmp(tconn->surface, "たら") ||
+      !strcmp(tconn->surface, "だら") ||
+      !strcmp(tconn->surface, "なら")   ) &&
+     c0 && !strcmp(c0, "助動詞")   )
+   flags |= FG_HAS_SUBJUNC;
+
+  // 「とは」「には」等含まない、「は」単体  11/3/2012
+ if (!strcmp(tconn->surface, "は") &&
      !strcmp(tcase->surface, "は")   )
    flags |= FG_HAS_HA;
 
@@ -368,31 +534,49 @@ if (EDBG)
    flags |= FG_HAS_DE;
 
  if (!strcmp(tconn->surface, "と") ||
-     !strcmp(tcase->surface, "と")   )
+     !strcmp(tcase->surface, "と")   ) {
    flags |= FG_HAS_TO;
+   if (c0 && !strcmp(c0, "助詞") &&
+       c1 && !strcmp(c1, "格助詞") &&
+       c2 && !strcmp(c2, "引用")     )
+     flags |= FG_HAS_QUOTING_TO;
+ }
+
+#if 0   // 11/5/2012 入れてもknbc変わらず？でも入れるべきような気もする…
+ if (!strcmp(tconn->surface, "って") &&
+       c0 && !strcmp(c0, "助詞") &&
+       c1 && !strcmp(c1, "格助詞") &&
+       c2 && !strcmp(c2, "連語")     )
+     flags |= FG_HAS_QUOTING_TO;
+#endif
 
  if (!strcmp(tconn->surface, "も") ||
      !strcmp(tcase->surface, "も")   )
    flags |= FG_HAS_MO;
 
  if (!strcmp(tconn->surface, "の") ||
-     !strcmp(tcase->surface, "の")   )  // FIXME "連体化"みるべき
-   flags |= FG_HAS_ADNOM_NO;
+     !strcmp(tcase->surface, "の")   ) {
+   flags |= FG_HAS_NO;
+   if (c1 && !strcmp(c1, "連体化"))
+     flags |= FG_HAS_ADNOM_NO;
+ }
 
  if (c1 && !strcmp(c1, "並立助詞") ||
      a1 && !strcmp(a1, "並立助詞") ||
-     hasTO() )           // 9/13/2012 「と」も並立助詞扱い（FIXME 正しいか？）
+     hasTO() ) {         // 9/13/2012 「と」も並立助詞扱い（FIXME 正しいか？）
    flags |= FG_HAS_PARA;
+   if (isNoun())
+     setPreferNoun();
+ }
 
  if (!strcmp(get_token(thead, 0), "感動詞")   ||
-     !strcmp(get_token(thead, 0), "接続詞") &&
+     (!strcmp(get_token(thead, 0), "接続詞") ||
+      !strcmp(get_token(thead, 0), "フィラー")   )&&
       ( cabch->token_size == 1 ||
         cabch->token_size == 2 && hasComma() ))
    flags |= FG_IS_SOLOCONJ_INTERJ;
 
-  // Note: PREFER_NOUN/PRED are set in kakarotBuild()
 
-#if 1
    if      (!strcmp(get_token(tconn, 0), "連体詞"))
      setPreferNoun();
 
@@ -428,11 +612,19 @@ if (EDBG)
 
      if (strcmp(get_token(tconn, 1), "終助詞")) // 終助詞以外の助詞
        setPreferPred();
+
      if (!strcmp(get_token(tconn, 1), "連体化")) // 連体化の「の」
        setPreferNoun();
+
+     if (!strcmp(c1, "副助詞") &&
+           !strcmp(tconn->surface, "なんて")) // 名詞にかかりうる FIXME tmp pch
+       setPreferNoun();
+
      if (!strcmp(c1, "格助詞") &&
          c2 && !strcmp(c2, "連語")) { // 格助詞,連語のケース。連体形のもの
        if (!strcmp(tconn->surface, "という") ||
+           !strcmp(tconn->surface, "に対する") ||
+           !strcmp(tconn->surface, "といった") ||
            !strcmp(tconn->surface, "による") ||
            !strcmp(tconn->surface, "に従う")   )  // FIXME TBC まだある！
          setPreferNoun();
@@ -443,11 +635,13 @@ if (EDBG)
        if (!isSoloConjInterj())
          setPreferPred();
    }
-#endif
 }
 
 //******************************************
 //  もろもろのデータ構造、関数等
+
+ // FIXME?  float for learn.  int for normal??
+typedef float eval_t;
 
 int nodecnt;
 Tree* g_tree; //どこからでも木を見るショートカット。よい子は真似しないように
@@ -455,10 +649,24 @@ chunkBitmapC dependable[MAXCHUNKS];  // 各文節(??深さ??)の、係り先候�
 chunkBitmapC nounChunks, predChunks; // 名詞/述語の文節セット
 chunkBitmapC paraChunks; // 並立助詞の文節セット
 chunkBitmapC commaChunks; // コンマを持つ文節セット
+chunkBitmapC lQuoteChunks; // 左かぎかっこを持つ文節セット
+
+ // iは右かぎかっこのある文節。このかぎかっこが一定文節数以上あれば「文」
+const int SENT_LENGTH = 3;
+bool isEndOfQuoteSent(int i) {
+ if (lQuoteChunks.get(i)) return false;
+ forv(j, i-1, 0)
+   if (lQuoteChunks.get(j))
+     return (i-j >= SENT_LENGTH);
+ return false;
+}
 
 int nounDistAry[MAXCHUNKS];  // 文節が名詞だったら＋１されていく配列
 int predDistAry[MAXCHUNKS];  // 文節が述語だったら＋１されていく配列
 int commaLvlAry[MAXCHUNKS];  // コンマがあると＋１されていく配列
+int lParLvlAry[MAXCHUNKS];   // 左かっこがあると＋１されていく配列
+int rParLvlAry[MAXCHUNKS];   // 右かっこがあると＋１されていく配列
+int quoToLvlAry[MAXCHUNKS];   // 引用の「と」があると＋１されていく配列
 
 int nounDist(int s, int d) { // 文節間の「名詞距離」
  return (nounDistAry[d] - nounDistAry[s]);
@@ -469,12 +677,21 @@ int predDist(int s, int d) { // 文節間の「述語距離」
 int commaLvl(int s, int d) { // 文節間の「コンマ距離」
  return (commaLvlAry[d] - commaLvlAry[s]);
 }
+bool sameParLevel(int s, int d) { // ２つの文節のかっこレベルが同じか
+ return (lParLvlAry[d] - lParLvlAry[s] == rParLvlAry[d] - rParLvlAry[s]);
+}
+bool sameQuoToLevel(int s, int d) { // ２つの文節の「引用のと」レベルが同じか
+ return (quoToLvlAry[d] == quoToLvlAry[s]);
+}
 
 //int findCase(Chunk*);  // 文節中の格辞を探す
 
 int bestlinks[MAXCHUNKS][MAXCHUNKS];  // 最善の係り先の格納場所
 
-int eval(); // defined below
+eval_t eval(); // defined below
+
+void readEvalParam(); // defined below
+void kakPostProcess();  // defined below
 
 void makedep(int s, int d) {
 if (EDBG) printf("  makedep %d to %d\n", s, d);
@@ -497,10 +714,10 @@ if (EDBG) printf("unmakedep %d to %d\n", s, d);
 
  // search(nChunk-1, +Inf, mask(0)) で呼ぶ
 
-int search(int d, int alpha, chunkBitmapC m) { // alphaはグローバルにする？
-if (EDBG) printf("search entered d=%d A=%d m=%016llx\n", d, alpha, m.v);
+eval_t search(int d, eval_t alpha, chunkBitmapC m) { //alphaはグローバルにする？
+if (EDBG) printf("search entered d=%d A=%f m=%016llx\n", d, alpha, m.v);
  nodecnt++;
- int v = eval();
+ eval_t v = eval();
  if (d == -1) {
    if (EDBG) {
      printf("eval @ leaf. dst[]:\n");
@@ -543,7 +760,7 @@ if (EDBG)
 
     // 係りを進めて探索
    makedep(d,j);
-   int vv = search(d-1, alpha, m2);
+   eval_t vv = search(d-1, alpha, m2);
    unmakedep(d,j);
    if (vv < alpha) {
      alpha = vv;
@@ -551,7 +768,7 @@ if (EDBG)
        bestlinks[d][k] = bestlinks[d-1][k];
      bestlinks[d][d] = j;
      if (EDBG) {
-        printf("bestlinks[%d]=%d upd v=%d 0-%d:\n", d, j, vv, d);
+        printf("bestlinks[%d]=%d upd v=%f 0-%d:\n", d, j, vv, d);
         forr(k, 0, d) {
           printf(" %d", bestlinks[d][k]);
           if ((k%5)==4) printf(",");
@@ -560,7 +777,7 @@ if (EDBG)
      }
    }
  }
-if (EDBG) printf("search returns v=%d\n", alpha);
+if (EDBG) printf("search returns v=%f\n", alpha);
  return alpha;
 }
 
@@ -573,39 +790,29 @@ if (EDBG) printf("search returns v=%d\n", alpha);
 enum { COSTAB_ADNOM_NO = 0, COSTAB_HA = 1, COSTAB_NOUN = 2, COSTAB_PRED = 3,
        COSTAB_ANY = 4 };
 
-#define TAKSAN44 \
- 100, 110, 120, 130, 140,   150, 160, 170, 180, 190, \
- 200, 210, 220, 230, 240,   250, 260, 270, 280, 290, \
- 300, 310, 320, 330, 340,   350, 360, 370, 380, 390, \
- 400, 410, 420, 430, 440,   450, 460, 470, 480, 490, \
- 500, 510, 520, 530
-
-enum { COST_AGAINST_RULE = 100, COST_OVER_COMMA = 36,
-       COST_HA_TO_PRED2NOUN =  30, COST_FOLLOW_COMMA = 30,
-       COST_NON_GA_TO_NONVERB = 8, COST_HA_NOTERM = 17,
-       COST_HA_SEMITERM = 4
-
-}; // FIXME tune
+eval_t COST_AGAINST_RULE;
+eval_t COST_OVER_COMMA;
+eval_t COST_HA_TO_PRED2NOUN;
+eval_t COST_FOLLOW_COMMA;
+eval_t COST_NON_GA_TO_NONVERB;
+eval_t COST_HA_NOTERM;
+eval_t COST_HA_SEMITERM;
+eval_t COST_NOUN_NOUN;
+eval_t COST_PAREN_LVL;
+eval_t COST_COMMA2NOCOMMA;
+eval_t COST_TERM_ORI;
+eval_t COST_ADJ_RENYOU;
+eval_t COST_ADNOMNO_NONOUN;
+eval_t COST_QUO_TO_LVL;
 
 //#define USE_DSUF
 
 #ifndef USE_DSUF
-int distCostTable[5][MAXCHUNKS] = {  // FIXME tune
- {0,0, 7,10,13,  15,17,19,21, 23,   25, 27, 30, 38, 46,   53, 60, 68, 77, 87,
-   TAKSAN44 },
- {0,0, 1, 2, 3,   4, 5, 7, 9, 11,   13, 15, 18, 21, 24,   33, 40, 48, 57, 57,
-   TAKSAN44 },
- {0,0, 7,10,13,  15,17,19,21, 23,   25, 27, 30, 38, 46,   53, 60, 68, 77, 87,
-   TAKSAN44 },
- {0,0, 2, 4, 6,   8,10,12,14, 17,   20, 24, 28, 34, 40,   50, 60, 68, 77, 87,
-   TAKSAN44 },
- {0,0, 9,15,19,  24,28,32,36, 40,   44, 48, 50, 55, 59,   63, 67, 69, 77, 87,
-   TAKSAN44 }
-};
+eval_t distCostTable[5][MAXCHUNKS];
 #else
 enum { DSUF_NEXT = 0, DSUF_1 = 1, DSUF_2_8 = 2, DSUF_9PLUS = 3,DSUF_END=4};
 
-int distCostTable[5][5] = {  // FIXME tune
+eval_t distCostTable[5][5] = {  // FIXME tune
  { 0, 0, 7, 13, 13 },  // NO
  { 0, 0, 2,  5,  4 },  // HA
  { 0, 0, 7, 13, 13 },  // NOUN
@@ -615,22 +822,16 @@ int distCostTable[5][5] = {  // FIXME tune
 #endif
 
 
-int nGaCostTable[MAXGAWO] = {  // FIXME tune
- 0, 0, 22, 33, 44, 55
-};
-int nWoCostTable[MAXGAWO] = {  // FIXME tune
- 0, 0, 22, 33, 44, 55
-};
-int nNiCostTable[MAXNI] = {    // FIXME tune
- 0, 0,  8, 19, 31, 41
-};
+eval_t nGaCostTable[MAXGAWO];
+eval_t nWoCostTable[MAXGAWO];
+eval_t nNiCostTable[MAXNI];
 
 //******************************************
 //  eval()    評価（コスト）関数
 
-int eval() {
+eval_t eval() {
 if (EDBG) printf("eval entered\n");
- int cost = 0;
+ eval_t cost = 0;
  int hop = 0;
 
  forr(c, 0, nChunk-1) {   // 各文節について
@@ -643,18 +844,24 @@ if (EDBG) printf("eval entered\n");
      semChunkC& srcch = semChunks[s];
      semChunkC& dstch = semChunks[d];
 
-     if (srcch.isSoloConjInterj()) continue;  // 接続詞・感動詞はスキップ
+     //if (srcch.isSoloConjInterj()) continue;  // 接続詞・感動詞はスキップ
+     if (srcch.isSoloConjInterj()) {
+       if (d != nChunk-1)
+         cost += 1;       // 文末を優先
+       continue;
+     }
 
      /* ・ルール外接続は減点
      */
      bool prefN = srcch.preferNoun();
      bool prefP = srcch.preferPred();
-     bool ruled = (prefN ? dstch.isNoun() :
-                   prefP ? dstch.isPred() : true) ||
+     //bool ruled = (prefN ? dstch.isNoun() :
+     //              prefP ? dstch.isPred() : true) ||
+     bool ruled = dependable[s].get(d) ||
                    srcch.hasPara() && dstch.hasPara();
      if (!ruled) {
        cost += COST_AGAINST_RULE;
-       if (EDBGE) printf("----==== norule: %d\n", COST_AGAINST_RULE);
+       if (EDBGE) printf("----==== norule: %f\n", eval_t(COST_AGAINST_RULE));
      }
 
      /* ・dstへの距離   1/2-5/6- ?
@@ -684,20 +891,33 @@ if (EDBG) printf("eval entered\n");
             (dist  >= 9) ? DSUF_9PLUS:
                            DSUF_2_8   ;
      cost += distCostTable[dtyp][dsuf];
-     if (EDBGE) printf("----==== dist: %d\n", distCostTable[dtyp][dsuf]);
+     if (EDBGE) printf("----==== dist: %f\n", distCostTable[dtyp][dsuf]);
 #else
-     cost += distCostTable[dtyp][dist];
-     if (EDBGE) printf("----==== dist: %d\n", distCostTable[dtyp][dist]);
+     eval_t c = distCostTable[dtyp][dist];
+
+      // 距離が長いときは、文末を少しだけ優先  11/3/2012 +8@knbc
+     if (d-s >= 3 && c >= 1) c = c-1;
+     cost += c;
+     //if (EDBGE) printf("----==== dist: %f\n", distCostTable[dtyp][dist]);
+     if (EDBGE) printf("----==== dist: %f\n", c);
 #endif
 
-     if (srcch.hasComma() && d-s==1) {
-       cost += COST_FOLLOW_COMMA;  // コンマ直前から直後は減点
-       if (EDBGE) printf("----==== follow comma: %d\n", COST_FOLLOW_COMMA);
+     if (srcch.hasComma() && //コンマのある文節からコンマのない途中の文節は減点
+         !dstch.hasTermination() &&   // 11/2/2012 KNBCで+~300chunks up
+         !dstch.hasComma() && dstch.isPred()) {
+       cost += COST_COMMA2NOCOMMA;
+       if (EDBGE) printf("--== comma2nocomma: %f\n",eval_t(COST_COMMA2NOCOMMA));
+     }
+
+     if (srcch.hasCommaLast() && d-s==1 &&  // コンマ直前から直後は減点
+         !(srcch.isNounOnly() && dstch.isNounBegin())) { // (名詞並列を除く)
+       cost += COST_FOLLOW_COMMA;
+       if (EDBGE) printf("--== follow comma: %f\n", eval_t(COST_FOLLOW_COMMA));
      }
 
      if (!srcch.hasComma() && commaLvl(s, d) > 0) {
        cost += COST_OVER_COMMA; // コンマ無し文節からコンマ越えて係るのは減点
-       if (EDBGE) printf("----==== over   comma: %d\n", COST_OVER_COMMA);
+       if (EDBGE) printf("----== over   comma: %f\n", eval_t(COST_OVER_COMMA));
      }
 
      /* ・「は」格は連体節になる述語にはかからない（？正しいか？）
@@ -708,7 +928,7 @@ if (EDBG) printf("eval entered\n");
 
      if (dstch.isPred2Noun() && srcch.hasHA()) {
        cost += COST_HA_TO_PRED2NOUN;
-       if (EDBGE) printf("----==== pred2nown   : %d\n", COST_HA_TO_PRED2NOUN);
+       if (EDBGE) printf("--== pred2nown : %f\n", eval_t(COST_HA_TO_PRED2NOUN));
      }
 
      /* ・「は」格は「切れ目」になる述語にかかりやすい（？正しいか？）
@@ -717,20 +937,74 @@ if (EDBG) printf("eval entered\n");
      */
 
      if (!dstch.hasTermination() && srcch.hasHA()) {
-       int x = (dstch.hasPostpConn() && dstch.hasComma()) ? COST_HA_SEMITERM :
+       eval_t x = (dstch.hasPostpConn() && dstch.hasComma()) ? COST_HA_SEMITERM:
                                                             COST_HA_NOTERM ;
        cost += x;
-       if (EDBGE) printf("----==== ha2term     : %d\n", x);
+       if (EDBGE) printf("----==== ha2term     : %f\n", x);
      }
 
      /* ・「が」格以外は動詞以外の述語にはかかりにくい
      * 　　動詞でない述語があって
-     * 　　srcesの中に「は」格があれば減点
+     * 　　srcesの中に「が」でない格があれば減点
      */
 
      if (dstch.isPred() && !dstch.isVerb() && srcch.hasNonGACase()) {
        cost += COST_NON_GA_TO_NONVERB;
-       if (EDBGE) printf("----==== nonga2noverb: %d\n", COST_NON_GA_TO_NONVERB);
+       if (EDBGE)
+         printf("----==== nonga2noverb: %f\n", eval_t(COST_NON_GA_TO_NONVERB));
+     }
+
+     /* ・文末に係る傾向の文節がそれ以外に係るなら減点
+     * 　　FIXME? 11/3/2012 入れてみたけど実はほとんど効いてない
+     */
+
+     //if (srcch.termOriented() && dstch.leastTerminal() && d-s>=2) {
+     if (srcch.termOriented() && dstch.leastTerminal()) {
+       cost += COST_TERM_ORI;
+       if (EDBGE) printf("----==== termori: %f\n", eval_t(COST_TERM_ORI));
+     }
+
+     /* ・形容詞単独、連用テ接続 -> 副詞的、格はたぶんない
+      */
+
+     if (dstch.adjRenyou()) {
+       cost += COST_ADJ_RENYOU;
+       if (EDBGE) printf("----==== adjrenyou: %f\n", eval_t(COST_ADJ_RENYOU));
+     }
+
+     /* ・連体化の「の」は名詞に係るのを優先
+      */
+
+     if (srcch.hasAdnomNO() && !dstch.isNoun()) {
+       cost += COST_ADNOMNO_NONOUN;
+       if (EDBGE) printf("----==== adnomno: %f\n", eval_t(COST_ADNOMNO_NONOUN));
+     }
+
+     /* ・名詞が続くケース（複合名詞、名詞並列）のコスト
+      */
+
+     if (srcch.isNounOnly() && !dstch.isPred() && dstch.isNounBegin()) {
+       cost += COST_NOUN_NOUN;
+       if (EDBGE)
+         printf("----==== nounnoun: %f\n", eval_t(COST_NOUN_NOUN));
+     }
+
+     /* ・かっこレベルが違う
+      */
+
+     if (!sameParLevel(s, d)) {
+       cost += COST_PAREN_LVL;
+       if (EDBGE)
+         printf("----==== parenlvl: %f\n", eval_t(COST_PAREN_LVL));
+     }
+
+     /* ・引用の「と」のレベルが違う
+      */
+
+     if (!sameQuoToLevel(s, d)) {
+       cost += COST_QUO_TO_LVL;
+       if (EDBGE)
+         printf("----==== quotolvl: %f\n", eval_t(COST_QUO_TO_LVL));
      }
 
    }  // if この文節から係る
@@ -751,23 +1025,23 @@ if (EDBG) printf("eval entered\n");
        if      (srcch.hasGA()) nGa++;
        else if (srcch.hasWO()) nWo++;
        else if (srcch.hasNI()) nNi++;
+//printf("(((( s %d  g %d w %d n %d\n", s, srcch.hasGA()?1:0, srcch.hasWO()?1:0, srcch.hasNI()?1:0);
      }
-     int x = nGaCostTable[std::min(nGa, MAXGAWO-1)] +
+     eval_t x = nGaCostTable[std::min(nGa, MAXGAWO-1)] +
              nWoCostTable[std::min(nWo, MAXGAWO-1)] +
              nNiCostTable[std::min(nNi, MAXNI-1)];
      cost += x;
-     if (EDBGE) printf("----==== gawoni      : %d\n", x);
+     if (EDBGE) printf("----==== gawoni      : %f (ga %d wo %d ni %d)\n",
+                        x, nGa, nWo, nNi);
    }
 
-   assert(dstch.nSrces < MAXSRC);
-
-   hop = std::max(hop, semChunks[c].hop);
 
    // 他に評価すべき項目あるか？？　TBC
 
  } // forr 各文節
 
-if (EDBG) printf("eval returns v=%d\n", cost);
+
+if (EDBG) printf("eval returns v=%f\n", cost);
  return cost; 
 }
 
@@ -778,12 +1052,21 @@ void kakarotOpen(const Param& param) { // TBC 品詞〜係り先テーブル読�
   std::string dbgmode = param.get<std::string>("debug-mode");
   //std::cout << "modeopt: " << dbgmode << ";\n";
 
+  int x = 0;
+  if (dbgmode.c_str() && isdigit(*dbgmode.c_str()))
+    sscanf(dbgmode.c_str(), "%d", &x);
+
   // -g1 : debug mode   -g2 : compare-cabocha mode
 
-  if (!strcmp(dbgmode.c_str(), "1"))
-    EDBG = 1;
-  if (!strcmp(dbgmode.c_str(), "2"))
-    CMP_CABOCHA = 1;
+    EDBG = x & 1;
+    CMP_CABOCHA = (x >> 1) & 1;
+    REGR_MODE   = (x >> 2) & 1;
+    CMPONLY     = (x >> 3) & 1;
+
+   printf("options: EDBG %d CMP_CABOCHA %d REGR_MODE %d CMPONLY %d\n",
+                    EDBG ,  CMP_CABOCHA ,  REGR_MODE ,  CMPONLY);
+
+    readEvalParam();
 }
 
 //******************************************
@@ -797,6 +1080,21 @@ void kakarotBuild(Tree* tree) {
  forr(i,0,nChunk-1)
    cabChunks[i] = tree->mutable_chunk(i);
 
+  // 先に左かぎかっこだけ探しておく(semChunks.build()で使う)
+ lQuoteChunks.init();
+ forr(i,0,nChunk-1) {
+   Chunk* cabch = cabChunks[i];  // copied from semChunkC::build then modified
+   int tkStt = cabch->token_pos;
+   int tkEnd = tkStt + cabch->token_size - 1;
+   forr(j, tkStt, tkEnd) {
+     const char* tok = tree->token(j)->normalized_surface;
+     if (!strcmp(tok, "「")) {
+       lQuoteChunks.set(i);
+       break;
+     }
+   }
+ }
+
   // semChunks[]初期化・セットアップ
  forr(i,0,nChunk-1)
    semChunks[i].build(tree);
@@ -806,11 +1104,13 @@ void kakarotBuild(Tree* tree) {
  predChunks.init();
  paraChunks.init();
  commaChunks.init();
- int ndis = 0, pdis = 0, clvl = 0;
+ int ndis = 0, pdis = 0, clvl = 0, lplvl = 0, rplvl = 0, tolvl = 0;
 
  forr(i,0,nChunk-1) {
    semChunkC& ch = semChunks[i];
    commaLvlAry[i] = clvl;
+   rParLvlAry[i] = rplvl;
+   quoToLvlAry[i] = tolvl;
    if (ch.isNoun()) {
      ndis++;
      nounChunks.set(i);
@@ -825,7 +1125,17 @@ void kakarotBuild(Tree* tree) {
      clvl++;
      commaChunks.set(i);
    }
+   if (ch.hasLParen()) {
+     lplvl++;
+   }
+   if (ch.hasRParen()) {
+     rplvl++;
+   }
+   if (ch.hasQuotingTO()) {
+     tolvl++;
+   }
 
+   lParLvlAry[i] = lplvl;
    nounDistAry[i] = ndis;
    predDistAry[i] = pdis;
    dependable[i].init();
@@ -837,25 +1147,23 @@ if (EDBG) printf("nCh: %016llx  pCh: %016llx\n", nounChunks.v, predChunks.v);
  forr(i,0,nChunk-1) {
    semChunkC& ch = semChunks[i];
 
-   //const Token* thead = tree->token(ch.buddy()->head_pos);
-   //nst Token* tconn = tree->token(ch.buddy()->token_pos+ch.buddy()->func_pos);
-   //const Token* tcase = tree->token(ch.caseTokenID);
-
-
-   //if ( !strcmp(get_token(tconn, 0), "助詞") &&
-   //     !strcmp(get_token(tconn, 1), "並立助詞"))
    if (ch.hasPara())
        dependable[i] |= paraChunks;  // 述語か並立助詞 FIXME これでいい?
            // 「XXとかYYとかがある」 XX->YY, YY->ある
-    // 接続詞（非ソロ）は当面述語にかかるとする　「|出したように、そして|」
-   else if (ch.isSoloConjInterj())
+   // ソロ接続詞は直後にかかるとする。ただし文頭の接続詞は文末（FIXME 暫定）
+   else if (ch.isSoloConjInterj()) {
+         dependable[i].set(nChunk-1);
          dependable[i].set(i+1);
-
+         //dependable[i].set(i==0 ? nChunk-1 : i+1);
+   }
 
    if (ch.preferNoun())
        dependable[i] |= nounChunks;
    if (ch.preferPred())
        dependable[i] |= predChunks;
+
+   if (i < nChunk-1 && ch.isNounOnly() && semChunks[i+1].isNounBegin())
+       dependable[i].set(i+1);
 
    if (i < nChunk-1 && dependable[i].empty()) {
        printf("WARNING: chunk[%d] (%s) has no candidate - set to next\n",
@@ -869,15 +1177,15 @@ if (EDBG) forr(i,0,nChunk-1)
 
   // 各種文節属性をダンプ
 if (EDBG) {
-#define NATTRS 26
- const char* lbl[NATTRS] = { 0,
+ const char* lbl[MAXFLAG+1] = { 0,
   "PrefN", "PrefP", "isN  ", "isP  ", "hasNO",
   "hasHA", "hasGA", "hasWO", "hasNI", "Comma",
   "Para ", "ConIn", "P2N  ", "Term ", "LPar ",
   "RPar ", "LQuo ", "RQuo ", "hasTO", "hasDE",
-  "hasMO", "isV  ", "PCon ", "PTerm", "Conj " 
+  "hasMO", "isV  ", "PCon ", "PTerm", "Conj ",
+  "auxil", "postp", "NOnly", "NBgn ", "Sbjnc",
  };
- forr(k,1,NATTRS-1) {
+ forr(k,1,MAXFLAG) {
    printf("%s: ", lbl[k]);
    forr(i,0,nChunk-1) {
      printf("%d", ((1 << k) & semChunks[i].flags) ? 1 : 0);
@@ -886,12 +1194,41 @@ if (EDBG) {
    printf("\n");
  }
 
- printf("distAry:\n");
+ printf("distAryN:\n");
  forr(k,0,nChunk-1) {
    printf("%d ", nounDistAry[k]);
    if ((k%5)==4) printf(" ");
  }
  printf("\n");
+
+ printf("distAryP:\n");
+ forr(k,0,nChunk-1) {
+   printf("%d ", predDistAry[k]);
+   if ((k%5)==4) printf(" ");
+ }
+ printf("\n");
+
+ printf("commaAry:\n");
+ forr(k,0,nChunk-1) {
+   printf("%d ", commaLvlAry[k]);
+   if ((k%5)==4) printf(" ");
+ }
+ printf("\n");
+
+ printf("lParAry:\n");
+ forr(k,0,nChunk-1) {
+   printf("%d ", lParLvlAry[k]);
+   if ((k%5)==4) printf(" ");
+ }
+ printf("\n");
+
+ printf("rParAry:\n");
+ forr(k,0,nChunk-1) {
+   printf("%d ", rParLvlAry[k]);
+   if ((k%5)==4) printf(" ");
+ }
+ printf("\n");
+
 }
 
  // TBC...
@@ -901,10 +1238,11 @@ if (EDBG) {
 //  kakarotParse()
 
 #define INF (999999)
+extern int curline;  // in learnkak.h
 
 void kakarotParse(Tree* tree) {
  if (nChunk <= 0)
-   return;
+   { curline++; return; }
 
    // cabocha結果をセーブ
  forr(i,0,nChunk-1) {
@@ -915,12 +1253,12 @@ void kakarotParse(Tree* tree) {
  semChunks[nChunk-1].dst = -1;  // 最後の文節は係り先なし
  bestlinks[nChunk-1][nChunk-1] =
  bestlinks[nChunk-2][nChunk-1] = -1;  // 最後の文節は係り先なし
- if (nChunk == 1) return;
+ if (nChunk == 1) { curline++; return; }
 
   // 最後１つ手前の文節は必ず最後のに係る FIXME 倒置あると嘘！
  semChunks[nChunk-2].dst = nChunk-1;
  bestlinks[nChunk-2][nChunk-2] = nChunk-1;
- if (nChunk == 2) return;
+ if (nChunk == 2) { curline++; return; }
 
  nodecnt = 0;
  search(nChunk-3, INF, chunkBitmapC(0LL));
@@ -990,6 +1328,10 @@ if (CMP_CABOCHA) {
    }
  }
 
+ if (REGR_MODE)
+   kakPostProcess();
 }
+
+#include "postkak.h"
 
 } // namespace CaboCha
