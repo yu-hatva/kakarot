@@ -1,4 +1,3 @@
-
 日本語係り受け解析システム「係ろっと」
 				v0.2  11/5/2012
 
@@ -50,8 +49,9 @@ cabochaをインストールする前に、係ろっとをcabochaソースに組
 cd $CABOCHA/src
 patch < $KAKAROT/patchfile
 cp $KAKAROT/kakarot.h .
+cp $KAKAROT/postkak.h .
 
-dep.cpp, parser.cpp が一部修正されます。新たに kakarot.h が追加されます。
+dep.cpp, parser.cpp が一部修正されます。新たに kakarot.h, postkak.h が追加されます。
 こうしておいてから普通に cabocha をビルド・インストールします。バイナリ名もcabochaとなりますので、通常のcabochaとの混同を避けるには、係ろっとのインストール先はどこか別のディレクトリにして(--prefix=$LOCALDIR)、実行時はフルパスを指定するとよいでしょう。
 
 なお、係ろっととは関係なくcabocha一般の話ですが、ビルドの時に以下の点が要注意でした：
